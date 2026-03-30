@@ -5,6 +5,8 @@ import json
 import discord
 from discord import app_commands
 from dotenv import load_dotenv
+from flask import Flask
+from threading import Thread
 
 load_dotenv()
 
@@ -176,4 +178,18 @@ async def restart_command(interaction: discord.Interaction):
     await client.close()
     os.execv(sys.executable, [sys.executable] + [__file__])
 
+app = Flask('')
+
+@app.route('/')
+def home():
+    return "Bot is running!"
+
+def run():
+    app.run(host='0.0.0.0', port=8080)
+
+def keep_alive():
+    t = Thread(target=run)
+    t.start()
+
+keep_alive()
 client.run(BOT_TOKEN)
