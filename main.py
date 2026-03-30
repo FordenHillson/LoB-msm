@@ -59,7 +59,7 @@ async def send_luck(interaction: discord.Interaction, good_chance: int, bad_chan
 
 @client.event
 async def on_ready():
-    await tree.sync()
+    await tree.sync(guild=None)
     print(f'Logged in as {client.user}')
 
 @tree.command(name="luck-anc", description="Check your luck on Crafting Ancient (base 30%)")
