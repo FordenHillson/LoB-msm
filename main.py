@@ -96,7 +96,7 @@ async def luck_exalt_command(interaction: discord.Interaction, bonus: int = 0):
     if strikes >= 7:
         embed = discord.Embed(
             title="❌ Cannot Use /luck-exalt",
-            description=f"You have {strikes}/7 strikes!\nUse `/luck-reduc-exalt` to reduce strikes.",
+            description=f"You have {strikes}/7 strikes!\nUse `/fail-exalted-reduce` to reduce strikes.",
             color=discord.Color.red()
         )
         await interaction.response.send_message(embed=embed)
@@ -129,7 +129,7 @@ async def luck_exalt_command(interaction: discord.Interaction, bonus: int = 0):
     )
     await interaction.response.send_message(embed=embed)
 
-@tree.command(name="luck-reduc-exalt", description="Reduce Exaltation strikes (need good luck %)")
+@tree.command(name="fail-exalted-reduce", description="Reduce Exaltation strikes (need good luck %)")
 async def luck_reduc_exalt_command(interaction: discord.Interaction, amount: int):
     user_id = str(interaction.user.id)
     data = load_data()
