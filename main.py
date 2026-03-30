@@ -156,7 +156,7 @@ async def luck_reduc_exalt_command(interaction: discord.Interaction, amount: int
         save_data(data)
         
         embed = discord.Embed(
-            title="✅ Strike Reduced!",
+            title="✅ Fail Exalted Reduce !",
             description=f"Roll: {roll}% (needed ≤ {amount}%)\nStrikes: {new_strikes}/7",
             color=discord.Color.green()
         )
