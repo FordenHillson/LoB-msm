@@ -69,7 +69,7 @@ async def luck_anc_command(interaction: discord.Interaction, bonus: int = 0):
     base_good = 30
     good_chance = min(base_good + bonus, 100)
     bad_chance = 100 - good_chance
-    await send_luck(interaction, good_chance=good_chance, bad_chance=bad_chance, title=f"Ancient Craft (Base: {base_good}% + Bonus: {bonus}%)", show_strikes=None, image_url="https://kommodo.ai/i/GzxkY1OwFfX6ZXQv5sCu")
+    await send_luck(interaction, good_chance=good_chance, bad_chance=bad_chance, title=f"Ancient Craft (Base: {base_good}% + Bonus: {bonus}%)", show_strikes=None, image_url="https://plain-apac-prod-public.komododecks.com/202604/01/GzxkY1OwFfX6ZXQv5sCu/image.png")
 
 @tree.command(name="luck-necro", description="Check your luck on Necromancer (base 4%)")
 async def luck_necro_command(interaction: discord.Interaction, bonus: int = 0):
