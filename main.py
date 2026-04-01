@@ -55,7 +55,7 @@ async def send_luck(interaction: discord.Interaction, good_chance: int, bad_chan
         description=desc,
         color=color
     )
-    if image_url:
+    if image_url and is_good:
         embed.set_image(url=image_url)
     await interaction.response.send_message(embed=embed)
 
