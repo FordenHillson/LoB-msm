@@ -55,9 +55,12 @@ async def send_luck(interaction: discord.Interaction, good_chance: int, bad_chan
         description=desc,
         color=color
     )
-    if image_url and is_good:
-        embed.set_image(url=image_url)
-    await interaction.response.send_message(embed=embed)
+    try:
+        if image_url and is_good:
+            embed.set_image(url=image_url)
+        await interaction.response.send_message(embed=embed)
+    except discord.errors.NotFound:
+        pass
 
 @client.event
 async def on_ready():
@@ -69,7 +72,7 @@ async def luck_anc_command(interaction: discord.Interaction, bonus: int = 0):
     base_good = 30
     good_chance = min(base_good + bonus, 100)
     bad_chance = 100 - good_chance
-    await send_luck(interaction, good_chance=good_chance, bad_chance=bad_chance, title=f"Ancient Craft (Base: {base_good}% + Bonus: {bonus}%)", show_strikes=None, image_url="https://plain-apac-prod-public.komododecks.com/202604/01/GzxkY1OwFfX6ZXQv5sCu/image.png")
+    await send_luck(interaction, good_chance=good_chance, bad_chance=bad_chance, title=f"Ancient Craft (Base: {base_good}% + Bonus: {bonus}%)", show_strikes=None, image_url="https://kommodo.ai/i/GzxkY1OwFfX6ZXQv5sCu")
 
 @tree.command(name="luck-necro", description="Check your luck on Necromancer (base 4%)")
 async def luck_necro_command(interaction: discord.Interaction, bonus: int = 0):
