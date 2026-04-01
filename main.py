@@ -35,7 +35,7 @@ def get_luck(good_chance: int):
     is_good = roll <= good_chance
     return roll, is_good
 
-async def send_luck(interaction: discord.Interaction, good_chance: int, bad_chance: int, title: str, show_strikes: int | None = -1):
+async def send_luck(interaction: discord.Interaction, good_chance: int, bad_chance: int, title: str, show_strikes: int | None = -1, image_url: str | None = None):
     roll, is_good = get_luck(good_chance)
     if is_good:
         luck_type = "Good Luck"
@@ -55,6 +55,8 @@ async def send_luck(interaction: discord.Interaction, good_chance: int, bad_chan
         description=desc,
         color=color
     )
+    if image_url:
+        embed.set_image(url=image_url)
     await interaction.response.send_message(embed=embed)
 
 @client.event
@@ -67,7 +69,7 @@ async def luck_anc_command(interaction: discord.Interaction, bonus: int = 0):
     base_good = 30
     good_chance = min(base_good + bonus, 100)
     bad_chance = 100 - good_chance
-    await send_luck(interaction, good_chance=good_chance, bad_chance=bad_chance, title=f"Ancient Craft (Base: {base_good}% + Bonus: {bonus}%)", show_strikes=None)
+    await send_luck(interaction, good_chance=good_chance, bad_chance=bad_chance, title=f"Ancient Craft (Base: {base_good}% + Bonus: {bonus}%)", show_strikes=None, image_url="https://kommodo.ai/i/GzxkY1OwFfX6ZXQv5sCu")
 
 @tree.command(name="luck-necro", description="Check your luck on Necromancer (base 4%)")
 async def luck_necro_command(interaction: discord.Interaction, bonus: int = 0):
