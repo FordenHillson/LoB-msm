@@ -35,7 +35,7 @@ def get_luck(good_chance: int):
     is_good = roll <= good_chance
     return roll, is_good
 
-async def send_luck(interaction: discord.Interaction, good_chance: int, bad_chance: int, title: str, show_strikes: int | None = -1, image_url: str | None = None):
+async def send_luck(interaction: discord.Interaction, good_chance: int, bad_chance: int, title: str, show_strikes: int | None = -1, image_url: str | None = None, image_file: str | None = None):
     roll, is_good = get_luck(good_chance)
     if is_good:
         luck_type = "Good Luck"
@@ -58,7 +58,12 @@ async def send_luck(interaction: discord.Interaction, good_chance: int, bad_chan
     try:
         if image_url and is_good:
             embed.set_image(url=image_url)
-        await interaction.response.send_message(embed=embed)
+        if image_file and is_good and os.path.exists(image_file):
+            file = discord.File(image_file)
+            embed.set_image(url=f"attachment://{os.path.basename(image_file)}")
+            await interaction.response.send_message(embed=embed, file=file)
+        else:
+            await interaction.response.send_message(embed=embed)
     except discord.errors.NotFound:
         pass
 
@@ -72,7 +77,7 @@ async def luck_anc_command(interaction: discord.Interaction, bonus: int = 0):
     base_good = 30
     good_chance = min(base_good + bonus, 100)
     bad_chance = 100 - good_chance
-    await send_luck(interaction, good_chance=good_chance, bad_chance=bad_chance, title=f"Ancient Craft (Base: {base_good}% + Bonus: {bonus}%)", show_strikes=None, image_url="https://kommodo.ai/i/GzxkY1OwFfX6ZXQv5sCu")
+    await send_luck(interaction, good_chance=good_chance, bad_chance=bad_chance, title=f"Ancient Craft (Base: {base_good}% + Bonus: {bonus}%)", show_strikes=None, image_file="anc.png")
 
 @tree.command(name="luck-necro", description="Check your luck on Necromancer (base 4%)")
 async def luck_necro_command(interaction: discord.Interaction, bonus: int = 0):
