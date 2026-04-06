@@ -17,6 +17,12 @@ OWNER_ID = int(os.getenv("DISCORD_OWNER_ID", 0))
 DATA_FILE = "user_data.json"
 EXCEL_FILE = "Cube_Bonus Potential Cube (Weapon).xlsx"
 
+def parse_stat(stat_str):
+    stat_str = stat_str.replace(',', '')
+    is_percent = '%' in stat_str
+    value = float(stat_str.rstrip('%'))
+    return value, is_percent
+
 def load_legendary_potential():
     try:
         wb = openpyxl.load_workbook(EXCEL_FILE)
@@ -29,24 +35,30 @@ def load_legendary_potential():
         for row in rows:
             if row[0] and row[1] and row[0] != 'Option':
                 opt = row[0]
-                stat = row[1].replace(',', '')
+                stat_str = row[1].replace(',', '')
+                value, is_percent = parse_stat(stat_str)
                 if opt not in first_poten:
-                    first_poten[opt] = []
-                if stat not in first_poten[opt]:
-                    first_poten[opt].append(stat)
+                    first_poten[opt] = {'flat': [], 'percent': []}
+                key = 'percent' if is_percent else 'flat'
+                if stat_str not in first_poten[opt][key]:
+                    first_poten[opt][key].append(stat_str)
             
             if row[4] and row[5] and row[4] != 'Option':
                 opt = row[4]
-                stat = row[5].replace(',', '')
+                stat_str = row[5].replace(',', '')
+                value, is_percent = parse_stat(stat_str)
                 if opt not in second_poten:
-                    second_poten[opt] = []
-                if stat not in second_poten[opt]:
-                    second_poten[opt].append(stat)
+                    second_poten[opt] = {'flat': [], 'percent': []}
+                key = 'percent' if is_percent else 'flat'
+                if stat_str not in second_poten[opt][key]:
+                    second_poten[opt][key].append(stat_str)
         
         for opt in first_poten:
-            first_poten[opt].sort(key=lambda x: float(x.rstrip('%')) if '%' in x else float(x), reverse=True)
+            for key in ['flat', 'percent']:
+                first_poten[opt][key].sort(key=lambda x: parse_stat(x)[0], reverse=True)
         for opt in second_poten:
-            second_poten[opt].sort(key=lambda x: float(x.rstrip('%')) if '%' in x else float(x), reverse=True)
+            for key in ['flat', 'percent']:
+                second_poten[opt][key].sort(key=lambda x: parse_stat(x)[0], reverse=True)
         
         return first_poten, second_poten
     except Exception as e:
@@ -179,6 +191,16 @@ async def luck_exalt_command(interaction: discord.Interaction, bonus: int = 0):
     )
     await interaction.response.send_message(embed=embed)
 
+def roll_potential(poten_data):
+    roll_type = random.choice(list(poten_data.keys()))
+    type_data = poten_data[roll_type]
+    available_keys = [k for k in ['flat', 'percent'] if type_data[k]]
+    key = random.choice(available_keys)
+    value = random.choice(type_data[key])
+    max_val = type_data[key][0]
+    min_val = type_data[key][-1]
+    return roll_type, value, max_val, min_val
+
 @tree.command(name="luck-poten-wep", description="Roll weapon potential from Legendary rank")
 async def luck_poten_wep_command(interaction: discord.Interaction):
     if not LEGENDARY_FIRST:
@@ -190,23 +212,9 @@ async def luck_poten_wep_command(interaction: discord.Interaction):
         await interaction.response.send_message(embed=embed)
         return
     
-    roll1_type = random.choice(list(LEGENDARY_FIRST.keys()))
-    roll1_stats = LEGENDARY_FIRST[roll1_type]
-    roll1_value = random.choice(roll1_stats)
-    roll1_max = roll1_stats[0]
-    roll1_min = roll1_stats[-1]
-    
-    roll2_type = random.choice(list(LEGENDARY_SECOND.keys()))
-    roll2_stats = LEGENDARY_SECOND[roll2_type]
-    roll2_value = random.choice(roll2_stats)
-    roll2_max = roll2_stats[0]
-    roll2_min = roll2_stats[-1]
-    
-    roll3_type = random.choice(list(LEGENDARY_SECOND.keys()))
-    roll3_stats = LEGENDARY_SECOND[roll3_type]
-    roll3_value = random.choice(roll3_stats)
-    roll3_max = roll3_stats[0]
-    roll3_min = roll3_stats[-1]
+    roll1_type, roll1_value, roll1_max, roll1_min = roll_potential(LEGENDARY_FIRST)
+    roll2_type, roll2_value, roll2_max, roll2_min = roll_potential(LEGENDARY_SECOND)
+    roll3_type, roll3_value, roll3_max, roll3_min = roll_potential(LEGENDARY_SECOND)
     
     embed = discord.Embed(
         title="🎲 Weapon Potential Roll (Legendary)",
