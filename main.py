@@ -2,6 +2,7 @@ import random
 import sys
 import os
 import json
+import openpyxl
 import discord
 from discord import app_commands
 from dotenv import load_dotenv
@@ -14,6 +15,45 @@ BOT_TOKEN = os.getenv("DISCORD_BOT_TOKEN")
 OWNER_ID = int(os.getenv("DISCORD_OWNER_ID", 0))
 
 DATA_FILE = "user_data.json"
+EXCEL_FILE = "Cube_Bonus Potential Cube (Weapon).xlsx"
+
+def load_legendary_potential():
+    try:
+        wb = openpyxl.load_workbook(EXCEL_FILE)
+        ws = wb['poten_wep']
+        rows = list(ws.iter_rows(min_row=391, max_row=530, values_only=True))
+        
+        first_poten = {}
+        second_poten = {}
+        
+        for row in rows:
+            if row[0] and row[1] and row[0] != 'Option':
+                opt = row[0]
+                stat = row[1].replace(',', '')
+                if opt not in first_poten:
+                    first_poten[opt] = []
+                if stat not in first_poten[opt]:
+                    first_poten[opt].append(stat)
+            
+            if row[4] and row[5] and row[4] != 'Option':
+                opt = row[4]
+                stat = row[5].replace(',', '')
+                if opt not in second_poten:
+                    second_poten[opt] = []
+                if stat not in second_poten[opt]:
+                    second_poten[opt].append(stat)
+        
+        for opt in first_poten:
+            first_poten[opt].sort(key=lambda x: float(x.rstrip('%')) if '%' in x else float(x), reverse=True)
+        for opt in second_poten:
+            second_poten[opt].sort(key=lambda x: float(x.rstrip('%')) if '%' in x else float(x), reverse=True)
+        
+        return first_poten, second_poten
+    except Exception as e:
+        print(f"Error loading Excel: {e}")
+        return {}, {}
+
+LEGENDARY_FIRST, LEGENDARY_SECOND = load_legendary_potential()
 
 def load_data():
     if os.path.exists(DATA_FILE):
@@ -136,6 +176,49 @@ async def luck_exalt_command(interaction: discord.Interaction, bonus: int = 0):
         title=f"{emoji} {luck_type}",
         description=desc,
         color=color
+    )
+    await interaction.response.send_message(embed=embed)
+
+@tree.command(name="luck-poten-wep", description="Roll weapon potential from Legendary rank")
+async def luck_poten_wep_command(interaction: discord.Interaction):
+    if not LEGENDARY_FIRST:
+        embed = discord.Embed(
+            title="❌ Error",
+            description="Could not load Legendary potential data.",
+            color=discord.Color.red()
+        )
+        await interaction.response.send_message(embed=embed)
+        return
+    
+    roll1_type = random.choice(list(LEGENDARY_FIRST.keys()))
+    roll1_stats = LEGENDARY_FIRST[roll1_type]
+    roll1_value = random.choice(roll1_stats)
+    roll1_max = roll1_stats[0]
+    roll1_min = roll1_stats[-1]
+    
+    roll2_type = random.choice(list(LEGENDARY_SECOND.keys()))
+    roll2_stats = LEGENDARY_SECOND[roll2_type]
+    roll2_value = random.choice(roll2_stats)
+    roll2_max = roll2_stats[0]
+    roll2_min = roll2_stats[-1]
+    
+    roll3_type = random.choice(list(LEGENDARY_SECOND.keys()))
+    roll3_stats = LEGENDARY_SECOND[roll3_type]
+    roll3_value = random.choice(roll3_stats)
+    roll3_max = roll3_stats[0]
+    roll3_min = roll3_stats[-1]
+    
+    embed = discord.Embed(
+        title="🎲 Weapon Potential Roll (Legendary)",
+        description=(
+            f"**1. {roll1_type} {roll1_value}**\n"
+            f"   Max High: `{roll1_max}` | Max Low: `{roll1_min}`\n\n"
+            f"**2. {roll2_type} {roll2_value}**\n"
+            f"   Max High: `{roll2_max}` | Max Low: `{roll2_min}`\n\n"
+            f"**3. {roll3_type} {roll3_value}**\n"
+            f"   Max High: `{roll3_max}` | Max Low: `{roll3_min}`"
+        ),
+        color=discord.Color.gold()
     )
     await interaction.response.send_message(embed=embed)
 
