@@ -1,2 +1,6 @@
 .env
 user_data.json
+seen_patch_notes.json
+_probe_*.py
+_probe_*.txt
+_probe_*.json

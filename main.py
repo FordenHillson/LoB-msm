@@ -1,7 +1,12 @@
+import asyncio
 import random
 import sys
 import os
 import json
+from datetime import datetime, timezone
+from urllib.parse import urlencode
+from urllib.request import Request, urlopen
+
 import openpyxl
 import discord
 from discord import app_commands
@@ -13,9 +18,29 @@ load_dotenv()
 
 BOT_TOKEN = os.getenv("DISCORD_BOT_TOKEN")
 OWNER_ID = int(os.getenv("DISCORD_OWNER_ID", 0))
+PATCH_NOTES_CHANNEL_ID = int(os.getenv("PATCH_NOTES_CHANNEL_ID", "1459937589812531354"))
 
 DATA_FILE = "user_data.json"
+SEEN_PATCH_NOTES_FILE = "seen_patch_notes.json"
 EXCEL_FILE = "Cube_Bonus Potential Cube (Weapon).xlsx"
+
+PATCH_NOTES_ALIAS = "MapleStoryMGlobal-th"
+PATCH_NOTES_BOARD_ID = "2777"
+PATCH_NOTES_POLL_SECONDS = int(os.getenv("PATCH_NOTES_POLL_SECONDS", "900"))
+PATCH_NOTES_API_URL = (
+    f"https://forum.nexon.com/api/v1/board/{PATCH_NOTES_BOARD_ID}/threads?"
+    + urlencode({
+        "alias": PATCH_NOTES_ALIAS,
+        "paginationType": "PAGING",
+        "pageNo": 1,
+        "pageSize": 15,
+        "blockSize": 5,
+    })
+)
+PATCH_NOTES_VIEW_BASE = (
+    f"https://forum.nexon.com/{PATCH_NOTES_ALIAS}/board_view"
+    f"?board={PATCH_NOTES_BOARD_ID}&thread="
+)
 
 def parse_stat(stat_str):
     stat_str = stat_str.replace(',', '')
@@ -77,6 +102,117 @@ def save_data(data):
     with open(DATA_FILE, "w") as f:
         json.dump(data, f)
 
+def load_seen_patch_notes():
+    if os.path.exists(SEEN_PATCH_NOTES_FILE):
+        with open(SEEN_PATCH_NOTES_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+            if isinstance(data, dict) and "seen_ids" in data:
+                return set(str(x) for x in data["seen_ids"])
+            if isinstance(data, list):
+                return set(str(x) for x in data)
+    return None
+
+def save_seen_patch_notes(seen_ids):
+    with open(SEEN_PATCH_NOTES_FILE, "w", encoding="utf-8") as f:
+        json.dump({"seen_ids": sorted(seen_ids)}, f, ensure_ascii=False, indent=2)
+
+def fetch_patch_note_threads():
+    req = Request(
+        PATCH_NOTES_API_URL,
+        headers={
+            "User-Agent": "Mozilla/5.0",
+            "Accept": "application/json",
+            "Referer": f"https://forum.nexon.com/{PATCH_NOTES_ALIAS}/board_list?board={PATCH_NOTES_BOARD_ID}",
+        },
+    )
+    with urlopen(req, timeout=30) as resp:
+        payload = json.loads(resp.read().decode("utf-8"))
+    threads = []
+    for item in payload.get("threads", []):
+        thread_id = str(item.get("threadId", "")).strip()
+        title = (item.get("title") or "").strip()
+        if not thread_id or not title:
+            continue
+        create_date = item.get("createDate")
+        threads.append({
+            "id": thread_id,
+            "title": title,
+            "create_date": create_date,
+            "url": f"{PATCH_NOTES_VIEW_BASE}{thread_id}",
+        })
+    return threads
+
+def format_patch_note_date(create_date):
+    if create_date is None:
+        return None
+    try:
+        return datetime.fromtimestamp(int(create_date), tz=timezone.utc).strftime("%Y.%m.%d")
+    except (TypeError, ValueError, OSError, OverflowError):
+        return None
+
+async def announce_patch_note(channel, note):
+    date_str = format_patch_note_date(note.get("create_date"))
+    description = f"**[{note['title']}]({note['url']})**"
+    if date_str:
+        description += f"\nวันที่: {date_str}"
+    embed = discord.Embed(
+        title="Patch Note",
+        description=description,
+        color=discord.Color.blue(),
+        url=note["url"],
+    )
+    await channel.send(content="Hey maple m have a new patch note !", embed=embed)
+
+async def check_and_announce_patch_notes():
+    try:
+        threads = await asyncio.to_thread(fetch_patch_note_threads)
+    except Exception as e:
+        print(f"Patch notes fetch failed: {e}")
+        return
+
+    if not threads:
+        print("Patch notes: no threads returned")
+        return
+
+    seen = load_seen_patch_notes()
+    current_ids = {t["id"] for t in threads}
+
+    # Cold start: remember current posts without announcing
+    if seen is None:
+        save_seen_patch_notes(current_ids)
+        print(f"Patch notes: seeded {len(current_ids)} existing thread(s), no announce")
+        return
+
+    new_notes = [t for t in threads if t["id"] not in seen]
+    new_notes.sort(key=lambda t: (t.get("create_date") is None, t.get("create_date") or 0, t["id"]))
+
+    if not new_notes:
+        return
+
+    channel = client.get_channel(PATCH_NOTES_CHANNEL_ID)
+    if channel is None:
+        try:
+            channel = await client.fetch_channel(PATCH_NOTES_CHANNEL_ID)
+        except Exception as e:
+            print(f"Patch notes: cannot access channel {PATCH_NOTES_CHANNEL_ID}: {e}")
+            return
+
+    for note in new_notes:
+        try:
+            await announce_patch_note(channel, note)
+            seen.add(note["id"])
+            save_seen_patch_notes(seen)
+            print(f"Patch notes: announced thread {note['id']}")
+        except Exception as e:
+            print(f"Patch notes: failed to announce {note['id']}: {e}")
+            break
+
+async def patch_notes_loop():
+    await client.wait_until_ready()
+    while not client.is_closed():
+        await check_and_announce_patch_notes()
+        await asyncio.sleep(PATCH_NOTES_POLL_SECONDS)
+
 intents = discord.Intents.default()
 intents.message_content = True
 client = discord.Client(intents=intents)
@@ -123,6 +259,9 @@ async def send_luck(interaction: discord.Interaction, good_chance: int, bad_chan
 async def on_ready():
     await tree.sync(guild=None)
     print(f'Logged in as {client.user}')
+    if not hasattr(client, "patch_notes_task") or client.patch_notes_task.done():
+        client.patch_notes_task = asyncio.create_task(patch_notes_loop())
+        print(f"Patch notes poller started (every {PATCH_NOTES_POLL_SECONDS}s)")
 
 @tree.command(name="luck-anc", description="Check your luck on Crafting Ancient (base 30%)")
 async def luck_anc_command(interaction: discord.Interaction, bonus: int = 0):
@@ -293,5 +432,6 @@ def keep_alive():
     t = Thread(target=run)
     t.start()
 
-keep_alive()
-client.run(BOT_TOKEN)
+if __name__ == "__main__":
+    keep_alive()
+    client.run(BOT_TOKEN)
