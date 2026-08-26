@@ -255,13 +255,63 @@ async def send_luck(interaction: discord.Interaction, good_chance: int, bad_chan
     except discord.errors.NotFound:
         pass
 
+# ใน main.py
+
 @client.event
 async def on_ready():
+    print("----------------------------------------")
+    print(f'Logged in as {client.user} (ID: {client.user.id})')
+    print("----------------------------------------")
     await tree.sync(guild=None)
-    print(f'Logged in as {client.user}')
+    
     if not hasattr(client, "patch_notes_task") or client.patch_notes_task.done():
         client.patch_notes_task = asyncio.create_task(patch_notes_loop())
         print(f"Patch notes poller started (every {PATCH_NOTES_POLL_SECONDS}s)")
+
+async def check_and_announce_patch_notes():
+    print("[Patch Notes] Checking for updates...") # เพิ่มเพื่อดูว่าลูปทำงานหรือไม่
+    try:
+        threads = await asyncio.to_thread(fetch_patch_note_threads)
+    except Exception as e:
+        print(f"Patch notes fetch failed: {e}")
+        return
+
+    if not threads:
+        print("Patch notes: no threads returned")
+        return
+
+    seen = load_seen_patch_notes()
+    current_ids = {t["id"] for t in threads}
+
+    if seen is None:
+        save_seen_patch_notes(current_ids)
+        print(f"Patch notes: seeded {len(current_ids)} existing thread(s), no announce")
+        return
+
+    new_notes = [t for t in threads if t["id"] not in seen]
+    new_notes.sort(key=lambda t: (t.get("create_date") is None, t.get("create_date") or 0, t["id"]))
+
+    if not new_notes:
+        print("[Patch Notes] No new patch notes found.")
+        return
+
+    channel = client.get_channel(PATCH_NOTES_CHANNEL_ID)
+    if channel is None:
+        try:
+            channel = await client.fetch_channel(PATCH_NOTES_CHANNEL_ID)
+        except Exception as e:
+            print(f"Patch notes: cannot access channel {PATCH_NOTES_CHANNEL_ID}: {e}")
+            return
+
+    for note in new_notes:
+        try:
+            await announce_patch_note(channel, note)
+            seen.add(note["id"])
+            save_seen_patch_notes(seen)
+            print(f"Patch notes: announced thread {note['id']}")
+        except Exception as e:
+            print(f"Patch notes: failed to announce {note['id']}: {e}")
+            break
 
 @tree.command(name="luck-anc", description="Check your luck on Crafting Ancient (base 30%)")
 async def luck_anc_command(interaction: discord.Interaction, bonus: int = 0):
