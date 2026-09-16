@@ -19,6 +19,9 @@ load_dotenv()
 BOT_TOKEN = os.getenv("DISCORD_BOT_TOKEN")
 OWNER_ID = int(os.getenv("DISCORD_OWNER_ID", 0))
 PATCH_NOTES_CHANNEL_ID = int(os.getenv("PATCH_NOTES_CHANNEL_ID", "1459937589812531354"))
+GIST_ID = os.getenv("GIST_ID", "").strip()
+GITHUB_TOKEN = (os.getenv("GITHUB_TOKEN") or os.getenv("GIST_TOKEN") or "").strip()
+GIST_FILENAME = os.getenv("GIST_FILENAME", "seen_patch_notes.json").strip() or "seen_patch_notes.json"
 
 DATA_FILE = "user_data.json"
 SEEN_PATCH_NOTES_FILE = "seen_patch_notes.json"
@@ -102,19 +105,78 @@ def save_data(data):
     with open(DATA_FILE, "w") as f:
         json.dump(data, f)
 
-def load_seen_patch_notes():
-    if os.path.exists(SEEN_PATCH_NOTES_FILE):
-        with open(SEEN_PATCH_NOTES_FILE, "r", encoding="utf-8") as f:
-            data = json.load(f)
-            if isinstance(data, dict) and "seen_ids" in data:
-                return set(str(x) for x in data["seen_ids"])
-            if isinstance(data, list):
-                return set(str(x) for x in data)
+def _parse_seen_payload(data):
+    if isinstance(data, dict) and "seen_ids" in data:
+        return set(str(x) for x in data["seen_ids"])
+    if isinstance(data, list):
+        return set(str(x) for x in data)
     return None
 
-def save_seen_patch_notes(seen_ids):
+def _seen_payload(seen_ids):
+    return {"seen_ids": sorted(str(x) for x in seen_ids)}
+
+def _use_gist_store():
+    return bool(GIST_ID and GITHUB_TOKEN)
+
+def _gist_headers():
+    return {
+        "Accept": "application/vnd.github+json",
+        "Authorization": f"Bearer {GITHUB_TOKEN}",
+        "X-GitHub-Api-Version": "2022-11-28",
+        "User-Agent": "discord-guss-patch-notes",
+        "Content-Type": "application/json",
+    }
+
+def _load_seen_from_gist():
+    url = f"https://api.github.com/gists/{GIST_ID}"
+    req = Request(url, headers=_gist_headers())
+    with urlopen(req, timeout=30) as resp:
+        gist = json.loads(resp.read().decode("utf-8"))
+    files = gist.get("files") or {}
+    file_info = files.get(GIST_FILENAME)
+    if not file_info:
+        return None
+    content = file_info.get("content")
+    if content is None or str(content).strip() == "":
+        return None
+    try:
+        return _parse_seen_payload(json.loads(content))
+    except json.JSONDecodeError as e:
+        raise ValueError(f"Gist file {GIST_FILENAME} is not valid JSON: {e}") from e
+
+def _save_seen_to_gist(seen_ids):
+    url = f"https://api.github.com/gists/{GIST_ID}"
+    body = json.dumps({
+        "files": {
+            GIST_FILENAME: {
+                "content": json.dumps(_seen_payload(seen_ids), ensure_ascii=False, indent=2),
+            }
+        }
+    }).encode("utf-8")
+    req = Request(url, data=body, headers=_gist_headers(), method="PATCH")
+    with urlopen(req, timeout=30) as resp:
+        resp.read()
+
+def _load_seen_from_file():
+    if os.path.exists(SEEN_PATCH_NOTES_FILE):
+        with open(SEEN_PATCH_NOTES_FILE, "r", encoding="utf-8") as f:
+            return _parse_seen_payload(json.load(f))
+    return None
+
+def _save_seen_to_file(seen_ids):
     with open(SEEN_PATCH_NOTES_FILE, "w", encoding="utf-8") as f:
-        json.dump({"seen_ids": sorted(seen_ids)}, f, ensure_ascii=False, indent=2)
+        json.dump(_seen_payload(seen_ids), f, ensure_ascii=False, indent=2)
+
+def load_seen_patch_notes():
+    if _use_gist_store():
+        return _load_seen_from_gist()
+    return _load_seen_from_file()
+
+def save_seen_patch_notes(seen_ids):
+    if _use_gist_store():
+        _save_seen_to_gist(seen_ids)
+        return
+    _save_seen_to_file(seen_ids)
 
 def fetch_patch_note_threads():
     req = Request(
@@ -164,6 +226,13 @@ async def announce_patch_note(channel, note):
     await channel.send(content="Hey maple m have a new patch note !", embed=embed)
 
 async def check_and_announce_patch_notes():
+    print("[Patch Notes] Checking for updates...")
+    if not _use_gist_store():
+        print(
+            "Patch notes: GIST_ID/GITHUB_TOKEN not set — using local "
+            f"{SEEN_PATCH_NOTES_FILE} (not durable on Render)"
+        )
+
     try:
         threads = await asyncio.to_thread(fetch_patch_note_threads)
     except Exception as e:
@@ -174,19 +243,29 @@ async def check_and_announce_patch_notes():
         print("Patch notes: no threads returned")
         return
 
-    seen = load_seen_patch_notes()
+    try:
+        seen = await asyncio.to_thread(load_seen_patch_notes)
+    except Exception as e:
+        print(f"Patch notes: failed to load seen state: {e}")
+        return
+
     current_ids = {t["id"] for t in threads}
 
     # Cold start: remember current posts without announcing
     if seen is None:
-        save_seen_patch_notes(current_ids)
-        print(f"Patch notes: seeded {len(current_ids)} existing thread(s), no announce")
+        try:
+            await asyncio.to_thread(save_seen_patch_notes, current_ids)
+            store = "gist" if _use_gist_store() else "local file"
+            print(f"Patch notes: seeded {len(current_ids)} existing thread(s) to {store}, no announce")
+        except Exception as e:
+            print(f"Patch notes: failed to seed seen state: {e}")
         return
 
     new_notes = [t for t in threads if t["id"] not in seen]
     new_notes.sort(key=lambda t: (t.get("create_date") is None, t.get("create_date") or 0, t["id"]))
 
     if not new_notes:
+        print("[Patch Notes] No new patch notes found.")
         return
 
     channel = client.get_channel(PATCH_NOTES_CHANNEL_ID)
@@ -201,7 +280,7 @@ async def check_and_announce_patch_notes():
         try:
             await announce_patch_note(channel, note)
             seen.add(note["id"])
-            save_seen_patch_notes(seen)
+            await asyncio.to_thread(save_seen_patch_notes, seen)
             print(f"Patch notes: announced thread {note['id']}")
         except Exception as e:
             print(f"Patch notes: failed to announce {note['id']}: {e}")
@@ -209,6 +288,8 @@ async def check_and_announce_patch_notes():
 
 async def patch_notes_loop():
     await client.wait_until_ready()
+    store = f"gist:{GIST_ID}" if _use_gist_store() else f"local:{SEEN_PATCH_NOTES_FILE}"
+    print(f"Patch notes store: {store}")
     while not client.is_closed():
         await check_and_announce_patch_notes()
         await asyncio.sleep(PATCH_NOTES_POLL_SECONDS)
@@ -265,51 +346,6 @@ async def on_ready():
     if not hasattr(client, "patch_notes_task") or client.patch_notes_task.done():
         client.patch_notes_task = asyncio.create_task(patch_notes_loop())
         print(f"Patch notes poller started (every {PATCH_NOTES_POLL_SECONDS}s)")
-
-async def check_and_announce_patch_notes():
-    print("[Patch Notes] Checking for updates...") # เพิ่มเพื่อดูว่าลูปทำงานหรือไม่
-    try:
-        threads = await asyncio.to_thread(fetch_patch_note_threads)
-    except Exception as e:
-        print(f"Patch notes fetch failed: {e}")
-        return
-
-    if not threads:
-        print("Patch notes: no threads returned")
-        return
-
-    seen = load_seen_patch_notes()
-    current_ids = {t["id"] for t in threads}
-
-    if seen is None:
-        save_seen_patch_notes(current_ids)
-        print(f"Patch notes: seeded {len(current_ids)} existing thread(s), no announce")
-        return
-
-    new_notes = [t for t in threads if t["id"] not in seen]
-    new_notes.sort(key=lambda t: (t.get("create_date") is None, t.get("create_date") or 0, t["id"]))
-
-    if not new_notes:
-        print("[Patch Notes] No new patch notes found.")
-        return
-
-    channel = client.get_channel(PATCH_NOTES_CHANNEL_ID)
-    if channel is None:
-        try:
-            channel = await client.fetch_channel(PATCH_NOTES_CHANNEL_ID)
-        except Exception as e:
-            print(f"Patch notes: cannot access channel {PATCH_NOTES_CHANNEL_ID}: {e}")
-            return
-
-    for note in new_notes:
-        try:
-            await announce_patch_note(channel, note)
-            seen.add(note["id"])
-            save_seen_patch_notes(seen)
-            print(f"Patch notes: announced thread {note['id']}")
-        except Exception as e:
-            print(f"Patch notes: failed to announce {note['id']}: {e}")
-            break
 
 @tree.command(name="luck-anc", description="Check your luck on Crafting Ancient (base 30%)")
 async def luck_anc_command(interaction: discord.Interaction, bonus: int = 0):
