@@ -19,6 +19,7 @@ load_dotenv()
 BOT_TOKEN = os.getenv("DISCORD_BOT_TOKEN")
 OWNER_ID = int(os.getenv("DISCORD_OWNER_ID", 0))
 PATCH_NOTES_CHANNEL_ID = int(os.getenv("PATCH_NOTES_CHANNEL_ID", "1459937589812531354"))
+DISCORD_GUILD_ID = int(os.getenv("DISCORD_GUILD_ID", "0") or 0)
 GIST_ID = os.getenv("GIST_ID", "").strip()
 GITHUB_TOKEN = (os.getenv("GITHUB_TOKEN") or os.getenv("GIST_TOKEN") or "").strip()
 GIST_FILENAME = os.getenv("GIST_FILENAME", "seen_patch_notes.json").strip() or "seen_patch_notes.json"
@@ -338,14 +339,30 @@ async def send_luck(interaction: discord.Interaction, good_chance: int, bad_chan
 
 @client.event
 async def on_ready():
-    print("----------------------------------------")
-    print(f'Logged in as {client.user} (ID: {client.user.id})')
-    print("----------------------------------------")
-    await tree.sync(guild=None)
-    
+    print("----------------------------------------", flush=True)
+    print(f"Logged in as {client.user} (ID: {client.user.id})", flush=True)
+    print("----------------------------------------", flush=True)
+
+    if DISCORD_GUILD_ID:
+        guild = discord.Object(id=DISCORD_GUILD_ID)
+        tree.copy_global_to(guild=guild)
+        synced = await tree.sync(guild=guild)
+        print(
+            f"Synced {len(synced)} guild command(s) to {DISCORD_GUILD_ID}: "
+            + ", ".join(sorted(c.name for c in synced)),
+            flush=True,
+        )
+    else:
+        synced = await tree.sync(guild=None)
+        print(
+            f"Synced {len(synced)} global command(s) (may take up to ~1h to appear): "
+            + ", ".join(sorted(c.name for c in synced)),
+            flush=True,
+        )
+
     if not hasattr(client, "patch_notes_task") or client.patch_notes_task.done():
         client.patch_notes_task = asyncio.create_task(patch_notes_loop())
-        print(f"Patch notes poller started (every {PATCH_NOTES_POLL_SECONDS}s)")
+        print(f"Patch notes poller started (every {PATCH_NOTES_POLL_SECONDS}s)", flush=True)
 
 @tree.command(name="luck-anc", description="Check your luck on Crafting Ancient (base 30%)")
 async def luck_anc_command(interaction: discord.Interaction, bonus: int = 0):
