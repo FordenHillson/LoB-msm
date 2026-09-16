@@ -493,6 +493,36 @@ async def luck_reduc_exalt_command(interaction: discord.Interaction, amount: int
     
     await interaction.response.send_message(embed=embed)
 
+@tree.command(name="test-patch-channel", description="Send a plain test message to the patch notes channel (owner only)")
+async def test_patch_channel_command(interaction: discord.Interaction):
+    if interaction.user.id != OWNER_ID:
+        await interaction.response.send_message("❌ You are not the bot owner!", ephemeral=True)
+        return
+
+    await interaction.response.defer(ephemeral=True)
+    channel = client.get_channel(PATCH_NOTES_CHANNEL_ID)
+    if channel is None:
+        try:
+            channel = await client.fetch_channel(PATCH_NOTES_CHANNEL_ID)
+        except Exception as e:
+            await interaction.followup.send(
+                f"❌ Cannot access channel `{PATCH_NOTES_CHANNEL_ID}`: {e}",
+                ephemeral=True,
+            )
+            return
+
+    try:
+        await channel.send(
+            f"🧪 Patch channel test from {client.user}. "
+            f"If you see this, send permissions are OK."
+        )
+        await interaction.followup.send(
+            f"✅ Sent test message to `{PATCH_NOTES_CHANNEL_ID}`.",
+            ephemeral=True,
+        )
+    except Exception as e:
+        await interaction.followup.send(f"❌ Failed to send: {e}", ephemeral=True)
+
 @tree.command(name="restart", description="Restart the bot (owner only)")
 async def restart_command(interaction: discord.Interaction):
     if interaction.user.id != OWNER_ID:
