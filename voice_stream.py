@@ -116,3 +116,33 @@ class MixingSink(voice_recv.AudioSink):
 
     def cleanup(self):
         self._running = False
+
+
+def install_dave_decrypt(vc):
+    """voice_recv only strips transport encryption; Discord's DAVE E2EE layer must be removed too."""
+    import davey
+
+    decryptor = vc._reader.decryptor
+    transport_decrypt = decryptor.decrypt_rtp
+    stats = {"ok": 0, "fail": 0}
+
+    def decrypt_rtp(packet):
+        data = transport_decrypt(packet)
+        conn = vc._connection
+        session = getattr(conn, "dave_session", None)
+        if session is None or not conn.dave_protocol_version or not session.ready:
+            return data
+        user_id = vc._ssrc_to_id.get(packet.ssrc)
+        if user_id is None:
+            return data
+        try:
+            out = session.decrypt(user_id, davey.MediaType.audio, data)
+            stats["ok"] += 1
+            return bytes(out)
+        except Exception as e:
+            stats["fail"] += 1
+            if stats["fail"] in (1, 50, 500):
+                print(f"DAVE decrypt failed ({stats}): {type(e).__name__}: {e}")
+            return data
+
+    decryptor.decrypt_rtp = decrypt_rtp
