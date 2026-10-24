@@ -572,7 +572,15 @@ async def voice_join_command(interaction: discord.Interaction):
     vc = interaction.guild.voice_client
     if vc:
         await vc.disconnect(force=True)
-    vc = await channel.connect(cls=voice_recv.VoiceRecvClient)
+    try:
+        vc = await channel.connect(cls=voice_recv.VoiceRecvClient, timeout=30)
+    except Exception as e:
+        print(f"Voice connect failed: {type(e).__name__}: {e}")
+        stale = interaction.guild.voice_client
+        if stale:
+            await stale.disconnect(force=True)
+        await interaction.followup.send(f"❌ Could not join voice: {type(e).__name__}: {e}", ephemeral=True)
+        return
     vc.listen(MixingSink())
     hub.channel_name = channel.name
     await interaction.followup.send(f"🎧 Joined **{channel.name}**.", ephemeral=True)
