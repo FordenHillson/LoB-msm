@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="th"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Voice Monitor</title>
+<style>body{font-family:sans-serif;background:#1e1f22;color:#eee;max-width:480px;margin:40px auto;padding:0 16px}
+.card{background:#2b2d31;padding:16px;border-radius:8px;margin-bottom:12px}
+button{padding:10px 16px;border:0;border-radius:4px;background:#5865f2;color:#fff;cursor:pointer}
+.dot{display:inline-block;width:10px;height:10px;border-radius:50%;background:#888;margin-right:6px}.on{background:#3ba55d}
+a{color:#aaa}</style></head>
+<body>
+<h2>🎧 Voice Monitor</h2>
+<div class="card"><span id="dot" class="dot"></span><b id="channel">-</b><br>
+Speaking: <span id="speakers">-</span><br>Listeners: <span id="listeners">0</span></div>
+<div class="card"><button id="btn">▶ Listen</button> <span id="state"></span></div>
+<a href="/logout">Logout</a>
+<script>
+let ctx, node, ws;
+const $ = id => document.getElementById(id);
+async function poll() {
+  try {
+    const s = await (await fetch('/api/status')).json();
+    $('dot').className = 'dot' + (s.connected ? ' on' : '');
+    $('channel').textContent = s.channel || 'Bot not in a voice channel';
+    $('speakers').textContent = s.speakers.join(', ') || '-';
+    $('listeners').textContent = s.listeners;
+  } catch (e) {}
+}
+setInterval(poll, 2000); poll();
+
+async function start() {
+  ctx = new AudioContext({sampleRate: 48000});
+  await ctx.audioWorklet.addModule('/static/player-worklet.js');
+  node = new AudioWorkletNode(ctx, 'pcm-player', {outputChannelCount: [2]});
+  node.connect(ctx.destination);
+  ws = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws/audio');
+  ws.binaryType = 'arraybuffer';
+  ws.onmessage = e => {
+    if (typeof e.data === 'string') { $('speakers').textContent = JSON.parse(e.data).speakers.join(', ') || '-'; return; }
+    node.port.postMessage(new Int16Array(e.data));
+  };
+  ws.onclose = stop;
+  $('btn').textContent = '⏹ Stop'; $('state').textContent = 'listening';
+}
+function stop() {
+  if (ws) { ws.onclose = null; ws.close(); ws = null; }
+  if (ctx) { ctx.close(); ctx = null; }
+  $('btn').textContent = '▶ Listen'; $('state').textContent = '';
+}
+$('btn').onclick = () => ctx ? stop() : start();
+</script></body></html>

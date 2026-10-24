@@ -1,0 +1,10 @@
+<!doctype html>
+<html lang="th"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Admin Login</title>
+<style>body{font-family:sans-serif;background:#1e1f22;color:#eee;display:grid;place-items:center;height:100vh;margin:0}
+form{background:#2b2d31;padding:24px;border-radius:8px;display:grid;gap:12px;width:260px}
+input,button{padding:8px;border-radius:4px;border:0}button{background:#5865f2;color:#fff;cursor:pointer}.err{color:#f66}</style></head>
+<body><form method="post"><h3>Voice Monitor</h3>
+{% if error %}<div class="err">{{ error }}</div>{% endif %}
+<input type="password" name="password" placeholder="Password" autofocus required>
+<button>Login</button></form></body></html>

@@ -12,6 +12,14 @@ _Avoid_: news post, update, announcement (when referring to the forum source)
 A single Discord channel message that informs members about one newly seen Patch Note.
 _Avoid_: notify, alert, broadcast
 
+**Voice Monitor**:
+The bot's live, non-recorded relay of a Discord voice channel's mixed audio to the admin web dashboard.
+_Avoid_: recording, wiretap
+
+**Listener**:
+An authenticated admin browser session connected to the Voice Monitor stream.
+_Avoid_: viewer, client
+
 **Seen Patch Note**:
 A Patch Note the bot has already recorded, so it must never produce another Announcement for that same identity.
 _Avoid_: cached post, processed thread

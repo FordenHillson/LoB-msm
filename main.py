@@ -11,10 +11,19 @@ import openpyxl
 import discord
 from discord import app_commands
 from dotenv import load_dotenv
-from flask import Flask
+import hmac
+import time
+from discord.ext import voice_recv
+from flask import Flask, render_template, request, session, redirect, jsonify, abort
+from flask_sock import Sock
 from threading import Thread
 
+from voice_stream import hub, MixingSink
+
 load_dotenv()
+
+ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD")
+FLASK_SECRET_KEY = os.getenv("FLASK_SECRET_KEY") or os.urandom(32).hex()
 
 BOT_TOKEN = os.getenv("DISCORD_BOT_TOKEN")
 OWNER_ID = int(os.getenv("DISCORD_OWNER_ID", 0))
@@ -297,6 +306,7 @@ async def patch_notes_loop():
 
 intents = discord.Intents.default()
 intents.message_content = True
+intents.voice_states = True
 client = discord.Client(intents=intents)
 tree = app_commands.CommandTree(client)
 
@@ -549,11 +559,106 @@ async def restart_command(interaction: discord.Interaction):
     await client.close()
     os.execv(sys.executable, [sys.executable] + [__file__])
 
+@tree.command(name="voice-join", description="Join your voice channel so admins can monitor it (owner only)")
+async def voice_join_command(interaction: discord.Interaction):
+    if interaction.user.id != OWNER_ID:
+        await interaction.response.send_message("❌ You are not the bot owner!", ephemeral=True)
+        return
+    if not interaction.user.voice or not interaction.user.voice.channel:
+        await interaction.response.send_message("❌ Join a voice channel first.", ephemeral=True)
+        return
+    channel = interaction.user.voice.channel
+    await interaction.response.defer(ephemeral=True)
+    vc = interaction.guild.voice_client
+    if vc:
+        await vc.disconnect(force=True)
+    vc = await channel.connect(cls=voice_recv.VoiceRecvClient)
+    vc.listen(MixingSink())
+    hub.channel_name = channel.name
+    await interaction.followup.send(f"🎧 Joined **{channel.name}**.", ephemeral=True)
+
+@tree.command(name="voice-leave", description="Leave the voice channel (owner only)")
+async def voice_leave_command(interaction: discord.Interaction):
+    if interaction.user.id != OWNER_ID:
+        await interaction.response.send_message("❌ You are not the bot owner!", ephemeral=True)
+        return
+    vc = interaction.guild.voice_client
+    if not vc:
+        await interaction.response.send_message("ℹ️ Not in a voice channel.", ephemeral=True)
+        return
+    await vc.disconnect(force=True)
+    hub.channel_name = None
+    await interaction.response.send_message("👋 Left the voice channel.", ephemeral=True)
+
+@client.event
+async def on_voice_state_update(member, before, after):
+    if client.user and member.id == client.user.id and after.channel is None:
+        hub.channel_name = None
+
 app = Flask('')
+app.secret_key = FLASK_SECRET_KEY
+sock = Sock(app)
+_login_attempts = {}
+
+def is_admin():
+    return session.get("admin") is True
 
 @app.route('/')
 def home():
     return "Bot is running!"
+
+@app.route('/login', methods=['GET', 'POST'])
+def login():
+    error = None
+    if request.method == 'POST':
+        ip = request.headers.get("X-Forwarded-For", request.remote_addr or "").split(",")[0].strip()
+        now = time.time()
+        recent = [t for t in _login_attempts.get(ip, []) if now - t < 60]
+        _login_attempts[ip] = recent
+        if len(recent) >= 5:
+            error = "Too many attempts, try again later."
+        elif ADMIN_PASSWORD and hmac.compare_digest(request.form.get("password", ""), ADMIN_PASSWORD):
+            session["admin"] = True
+            return redirect("/dashboard")
+        else:
+            recent.append(now)
+            error = "Wrong password."
+    return render_template("login.html", error=error)
+
+@app.route('/logout')
+def logout():
+    session.clear()
+    return redirect("/login")
+
+@app.route('/dashboard')
+def dashboard():
+    if not is_admin():
+        return redirect("/login")
+    return render_template("dashboard.html")
+
+@app.route('/api/status')
+def api_status():
+    if not is_admin():
+        abort(401)
+    return jsonify(hub.status())
+
+@sock.route('/ws/audio')
+def ws_audio(ws):
+    if not is_admin():
+        return
+    q = hub.add_listener()
+    try:
+        while True:
+            try:
+                item = q.get(timeout=15)
+            except Exception:
+                ws.send(json.dumps({"speakers": hub.active_speakers()}))  # keepalive
+                continue
+            ws.send(item)
+    except Exception:
+        pass
+    finally:
+        hub.remove_listener(q)
 
 def run():
     port = int(os.environ.get("PORT", 8080))
