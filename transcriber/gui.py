@@ -10,6 +10,7 @@ from tkinter import filedialog, messagebox, ttk
 import transcribe as tr
 
 MODELS = ["tiny", "base", "small", "medium", "large-v3"]
+ENGINES = {"ในเครื่อง (Whisper, ออฟไลน์)": "local", "Gemini (คลาวด์)": "gemini"}
 LANGUAGES = {"ไทย (th)": "th", "English (en)": "en", "Auto-detect": None}
 
 
@@ -28,6 +29,10 @@ class App(tk.Tk):
         self.language = tk.StringVar(value="ไทย (th)")
         self.overwrite = tk.BooleanVar(value=False)
         self.gpu = tk.BooleanVar(value=False)
+        self.engine = tk.StringVar(value=list(ENGINES)[0])
+        self.gemini_model = tk.StringVar(value=tr.GEMINI_MODEL)
+        self.api_key = tk.StringVar()
+        self.glossary = tk.StringVar()
 
         frm = ttk.Frame(self, padding=12)
         frm.pack(fill="both", expand=True)
@@ -41,32 +46,71 @@ class App(tk.Tk):
         ttk.Entry(frm, textvariable=self.json).grid(row=1, column=1, sticky="ew", padx=6, pady=3)
         ttk.Button(frm, text="เลือก...", command=self.pick_json).grid(row=1, column=2)
 
+        eng = ttk.Frame(frm)
+        eng.grid(row=2, column=0, columnspan=3, sticky="w", pady=(8, 0))
+        ttk.Label(eng, text="เครื่องมือถอดเสียง").pack(side="left")
+        engine_box = ttk.Combobox(eng, textvariable=self.engine, values=list(ENGINES), width=28, state="readonly")
+        engine_box.pack(side="left", padx=(4, 0))
+
+        self.cloud = ttk.Frame(frm)
+        self.cloud.grid(row=3, column=0, columnspan=3, sticky="ew", pady=(4, 0))
+        self.cloud.columnconfigure(3, weight=1)
+        ttk.Label(self.cloud, text="โมเดล Gemini").grid(row=0, column=0, sticky="w")
+        ttk.Entry(self.cloud, textvariable=self.gemini_model, width=22).grid(row=0, column=1, padx=(4, 12))
+        ttk.Label(self.cloud, text="API key").grid(row=0, column=2, sticky="w")
+        ttk.Entry(self.cloud, textvariable=self.api_key, show="*").grid(row=0, column=3, sticky="ew", padx=4)
+        ttk.Label(
+            self.cloud, foreground="#b45309",
+            text="⚠ เสียงที่ถอดจะถูกส่งไปที่ Google (ว่างไว้ = ใช้ตัวแปร GEMINI_API_KEY; ไม่บันทึกคีย์ลงไฟล์)",
+        ).grid(row=1, column=0, columnspan=4, sticky="w", pady=(2, 0))
+
+        gl = ttk.Frame(frm)
+        gl.grid(row=4, column=0, columnspan=3, sticky="ew", pady=(4, 0))
+        gl.columnconfigure(1, weight=1)
+        ttk.Label(gl, text="ศัพท์เฉพาะ").grid(row=0, column=0, sticky="w")
+        ttk.Entry(gl, textvariable=self.glossary).grid(row=0, column=1, sticky="ew", padx=4)
+        ttk.Label(gl, text="คั่นด้วย ,").grid(row=0, column=2)
+
         opts = ttk.Frame(frm)
-        opts.grid(row=2, column=0, columnspan=3, sticky="w", pady=8)
+        opts.grid(row=5, column=0, columnspan=3, sticky="w", pady=8)
         ttk.Label(opts, text="โมเดล").pack(side="left")
-        ttk.Combobox(opts, textvariable=self.model, values=MODELS, width=10, state="readonly").pack(side="left", padx=(4, 14))
+        self.model_box = ttk.Combobox(opts, textvariable=self.model, values=MODELS, width=10, state="readonly")
+        self.model_box.pack(side="left", padx=(4, 14))
         ttk.Label(opts, text="ภาษา").pack(side="left")
         ttk.Combobox(opts, textvariable=self.language, values=list(LANGUAGES), width=12, state="readonly").pack(side="left", padx=(4, 14))
         ttk.Checkbutton(opts, text="ถอดซ้ำช่วงที่มีข้อความแล้ว", variable=self.overwrite).pack(side="left", padx=(0, 14))
-        ttk.Checkbutton(opts, text="ใช้ GPU (CUDA)", variable=self.gpu).pack(side="left")
+        self.gpu_check = ttk.Checkbutton(opts, text="ใช้ GPU (CUDA)", variable=self.gpu)
+        self.gpu_check.pack(side="left")
 
         buttons = ttk.Frame(frm)
-        buttons.grid(row=3, column=0, columnspan=3, sticky="w")
+        buttons.grid(row=6, column=0, columnspan=3, sticky="w")
         self.start_btn = ttk.Button(buttons, text="เริ่มถอดเสียง", command=self.start)
         self.start_btn.pack(side="left")
         self.stop_btn = ttk.Button(buttons, text="ยกเลิก", command=self.cancel.set, state="disabled")
         self.stop_btn.pack(side="left", padx=6)
 
         self.bar = ttk.Progressbar(frm, mode="determinate")
-        self.bar.grid(row=4, column=0, columnspan=3, sticky="ew", pady=8)
+        self.bar.grid(row=7, column=0, columnspan=3, sticky="ew", pady=8)
         self.status = ttk.Label(frm, text="พร้อม")
-        self.status.grid(row=5, column=0, columnspan=3, sticky="w")
+        self.status.grid(row=8, column=0, columnspan=3, sticky="w")
 
         self.log = tk.Text(frm, height=14, wrap="word", state="disabled")
-        self.log.grid(row=6, column=0, columnspan=3, sticky="nsew", pady=(6, 0))
-        frm.rowconfigure(6, weight=1)
+        self.log.grid(row=9, column=0, columnspan=3, sticky="nsew", pady=(6, 0))
+        frm.rowconfigure(9, weight=1)
 
+        self.local_widgets = [self.model_box, self.gpu_check]
+        engine_box.bind("<<ComboboxSelected>>", lambda _e: self.update_engine())
+        self.update_engine()
         self.after(100, self.poll)
+
+    def update_engine(self):
+        cloud = ENGINES[self.engine.get()] == "gemini"
+        if cloud:
+            self.cloud.grid()
+        else:
+            self.cloud.grid_remove()
+        for w in self.local_widgets:
+            w.configure(state="disabled" if cloud else ("readonly" if w is self.model_box else "normal"))
 
     def pick_wav(self):
         path = filedialog.askopenfilename(filetypes=[("WAV", "*.wav")])
@@ -105,26 +149,43 @@ class App(tk.Tk):
         self.stop_btn.configure(state="normal")
         self.bar.configure(value=0)
         self.write("--- เริ่มงาน ---")
-        args = (self.wav.get(), self.json.get(), self.model.get(), LANGUAGES[self.language.get()], self.overwrite.get(), self.gpu.get())
+        args = (
+            self.wav.get(), self.json.get(), self.model.get(), LANGUAGES[self.language.get()], self.overwrite.get(), self.gpu.get(),
+            ENGINES[self.engine.get()], self.gemini_model.get().strip(), self.api_key.get().strip(), self.glossary.get().strip(),
+        )
         self.worker = threading.Thread(target=self.run_job, args=args, daemon=True)
         self.worker.start()
 
-    def run_job(self, wav, json_path, model, language, overwrite, gpu=False):
+    def run_job(self, wav, json_path, model, language, overwrite, gpu=False, engine="local", gemini_model="", api_key="", glossary=""):
         put = self.events.put
         try:
             data = json.loads(Path(json_path).read_text(encoding="utf-8"))
             source = tr.AudioSource(json_path, data, wav or None)
             tracks = [sp for sp in sorted({g["speaker"] for g in data.get("segments", [])}) if source.uses_track(sp)]
             put(("status", f"ใช้ไฟล์เสียงรายคน: {', '.join(tracks) or 'ไม่มี (ใช้ไฟล์ผสมแทน)'}"))
-            put(("status", f"กำลังโหลดโมเดล '{model}' (ครั้งแรกต้องดาวน์โหลด อาจใช้เวลานาน)..."))
-            transcribe = tr.make_whisper(model, language, gpu)
+            if engine == "gemini":
+                put(("status", f"ใช้ Gemini '{gemini_model}' (เสียงถูกส่งไปที่ Google)"))
+                transcribe = tr.make_gemini(gemini_model or tr.GEMINI_MODEL, language, glossary, api_key or None)
+            else:
+                put(("status", f"กำลังโหลดโมเดล '{model}' (ครั้งแรกต้องดาวน์โหลด อาจใช้เวลานาน)..."))
+                transcribe = tr.make_whisper(model, language, gpu, glossary)
             put(("status", "กำลังถอดเสียง..."))
-            tr.fill_segments(
-                data, source.for_segment, transcribe, overwrite=overwrite,
-                log=lambda m: put(("log", m)),
-                progress=lambda done, total: put(("progress", done, total)),
-                cancelled=self.cancel.is_set,
-            )
+            try:
+                tr.fill_segments(
+                    data, source.for_segment, transcribe, overwrite=overwrite,
+                    log=lambda m: put(("log", m)),
+                    progress=lambda done, total: put(("progress", done, total)),
+                    cancelled=self.cancel.is_set,
+                )
+            except InterruptedError:
+                raise
+            except Exception as e:
+                out_json, _ = tr.save_outputs(data, json_path)  # keep what was already transcribed
+                msg = f"{type(e).__name__}: {e}"
+                msg += f"\nบันทึกผลที่ถอดได้บางส่วนแล้ว: {out_json}"
+                msg += "\nถอดต่อได้: เปิดไฟล์ .transcribed.json นี้ ช่วงที่มีข้อความแล้วจะถูกข้าม"
+                put(("error", msg))
+                return
             out_json, out_txt = tr.save_outputs(data, json_path)
             put(("done", f"เสร็จแล้ว\n{out_json}\n{out_txt}"))
         except InterruptedError:

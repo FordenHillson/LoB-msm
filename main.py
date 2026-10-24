@@ -27,6 +27,18 @@ FLASK_SECRET_KEY = os.getenv("FLASK_SECRET_KEY") or os.urandom(32).hex()
 
 BOT_TOKEN = os.getenv("DISCORD_BOT_TOKEN")
 OWNER_ID = int(os.getenv("DISCORD_OWNER_ID", 0))
+
+def _id_set(name):
+    return {int(x) for x in os.getenv(name, "").replace(" ", "").split(",") if x.isdigit()}
+
+# Besides the owner, these users / roles may use /voice-join and /voice-leave (comma-separated Discord IDs)
+VOICE_ALLOWED_USER_IDS = _id_set("VOICE_ALLOWED_USER_IDS")
+VOICE_ALLOWED_ROLE_IDS = _id_set("VOICE_ALLOWED_ROLE_IDS")
+
+def can_use_voice(user):
+    if user.id == OWNER_ID or user.id in VOICE_ALLOWED_USER_IDS:
+        return True
+    return any(r.id in VOICE_ALLOWED_ROLE_IDS for r in getattr(user, "roles", []))
 PATCH_NOTES_CHANNEL_ID = int(os.getenv("PATCH_NOTES_CHANNEL_ID", "1459937589812531354"))
 DISCORD_GUILD_ID = int(os.getenv("DISCORD_GUILD_ID", "0") or 0)
 GIST_ID = os.getenv("GIST_ID", "").strip()
@@ -559,10 +571,10 @@ async def restart_command(interaction: discord.Interaction):
     await client.close()
     os.execv(sys.executable, [sys.executable] + [__file__])
 
-@tree.command(name="voice-join", description="Join your voice channel so admins can monitor it (owner only)")
+@tree.command(name="voice-join", description="Join your voice channel so admins can monitor it (allowed users only)")
 async def voice_join_command(interaction: discord.Interaction):
-    if interaction.user.id != OWNER_ID:
-        await interaction.response.send_message("❌ You are not the bot owner!", ephemeral=True)
+    if not can_use_voice(interaction.user):
+        await interaction.response.send_message("❌ You are not allowed to use this command.", ephemeral=True)
         return
     if not interaction.user.voice or not interaction.user.voice.channel:
         await interaction.response.send_message("❌ Join a voice channel first.", ephemeral=True)
@@ -587,10 +599,10 @@ async def voice_join_command(interaction: discord.Interaction):
     hub.channel_name = channel.name
     await interaction.followup.send(f"🎧 Joined **{channel.name}**.", ephemeral=True)
 
-@tree.command(name="voice-leave", description="Leave the voice channel (owner only)")
+@tree.command(name="voice-leave", description="Leave the voice channel (allowed users only)")
 async def voice_leave_command(interaction: discord.Interaction):
-    if interaction.user.id != OWNER_ID:
-        await interaction.response.send_message("❌ You are not the bot owner!", ephemeral=True)
+    if not can_use_voice(interaction.user):
+        await interaction.response.send_message("❌ You are not allowed to use this command.", ephemeral=True)
         return
     vc = interaction.guild.voice_client
     if not vc:
