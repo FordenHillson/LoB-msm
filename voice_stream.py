@@ -10,6 +10,7 @@ from discord.ext import voice_recv
 OPUS_SILENCE = bytes([0xF8, 0xFF, 0xFE])
 FRAME_BYTES = 3840  # 20ms of 48kHz stereo s16le
 FRAME_SECONDS = 0.02
+SEGMENT_GAP = 0.8  # seconds of silence that ends a speaker segment (client subtracts this)
 MAX_USER_BACKLOG = 10  # frames kept per speaker before dropping oldest
 
 
@@ -72,6 +73,8 @@ class MixingSink(voice_recv.AudioSink):
         super().__init__()
         self._lock = threading.Lock()
         self._buffers = {}
+        self._open = {}  # speaker name -> user id string, for speaker segment events
+        self._last_heard = {}
         self._running = True
         self._thread = threading.Thread(target=self._mix_loop, daemon=True)
         self._thread.start()
@@ -86,7 +89,12 @@ class MixingSink(voice_recv.AudioSink):
         with self._lock:
             buf = self._buffers.setdefault(name, deque(maxlen=MAX_USER_BACKLOG))
             buf.append(data.pcm)
-        hub.speakers[name] = time.monotonic()
+        now = time.monotonic()
+        hub.speakers[name] = now
+        self._last_heard[name] = now
+        if name not in self._open:
+            self._open[name] = str(getattr(user, "id", ""))
+            hub.publish(json.dumps({"event": "start", "speaker": name, "user_id": self._open[name]}))
 
     def _mix_loop(self):
         next_tick = time.monotonic()
@@ -105,6 +113,10 @@ class MixingSink(voice_recv.AudioSink):
                     mixed[: len(arr)] += arr
                 pcm = np.clip(mixed, -32768, 32767).astype(np.int16).tobytes()
                 hub.publish(pcm)
+            now = time.monotonic()
+            for name in [n for n in self._open if now - self._last_heard[n] >= SEGMENT_GAP]:
+                uid = self._open.pop(name)
+                hub.publish(json.dumps({"event": "end", "speaker": name, "user_id": uid}))
             names = hub.active_speakers()
             if names != last_names:
                 last_names = names

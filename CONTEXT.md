@@ -20,6 +20,10 @@ _Avoid_: wiretap
 An authenticated admin browser session connected to the Voice Monitor stream.
 _Avoid_: viewer, client
 
+**Speaker Segment**:
+A span of seconds, relative to the start of a saved recording, during which one named participant was speaking; exported as JSON for later manual transcription.
+_Avoid_: transcript, caption
+
 **Seen Patch Note**:
 A Patch Note the bot has already recorded, so it must never produce another Announcement for that same identity.
 _Avoid_: cached post, processed thread

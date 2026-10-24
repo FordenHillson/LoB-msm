@@ -12,6 +12,7 @@ a{color:#aaa}</style></head>
 Speaking: <span id="speakers">-</span><br>Listeners: <span id="listeners">0</span></div>
 <div class="card"><button id="btn">▶ Listen</button> <span id="state"></span>
 <div id="rec" style="display:none;margin-top:8px"><span style="color:#f04747">●</span> REC <span id="recinfo"></span></div></div>
+<div class="card" id="segcard" style="display:none"><b>Speaker timeline</b><div id="segs" style="max-height:200px;overflow:auto;font-size:14px"></div></div>
 <a href="/logout">Logout</a>
 <script>
 let ctx, node, ws;
@@ -37,7 +38,12 @@ async function start() {
   ws = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws/audio');
   ws.binaryType = 'arraybuffer';
   ws.onmessage = e => {
-    if (typeof e.data === 'string') { $('speakers').textContent = JSON.parse(e.data).speakers.join(', ') || '-'; return; }
+    if (typeof e.data === 'string') {
+      const m = JSON.parse(e.data);
+      if (m.event) segmentEvent(m);
+      else if (m.speakers) $('speakers').textContent = m.speakers.join(', ') || '-';
+      return;
+    }
     const pcm = new Int16Array(e.data);
     node.port.postMessage(pcm);
     record(pcm);
@@ -48,12 +54,36 @@ async function start() {
 }
 
 function startRecording() {
-  rec = {chunks: [], samples: 0, t0: performance.now()}; // samples = interleaved int16 count
+  rec = {chunks: [], samples: 0, t0: performance.now(), startedAt: new Date(), open: {}, segs: []}; // samples = interleaved int16 count
+  $('segs').textContent = ''; $('segcard').style.display = 'block';
   $('rec').style.display = 'block';
   recTimer = setInterval(() => {
     const sec = Math.floor((performance.now() - rec.t0) / 1000);
     $('recinfo').textContent = `${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, '0')} (${(rec.samples * 2 / 1048576).toFixed(1)} MB)`;
   }, 500);
+}
+const SEGMENT_GAP = 0.8;
+const fmt = sec => `${String(Math.floor(sec / 60)).padStart(2, '0')}:${(sec % 60).toFixed(1).padStart(4, '0')}`;
+function segmentEvent(m) {
+  if (!rec) return;
+  const t = (performance.now() - rec.t0) / 1000;
+  if (m.event === 'start') {
+    rec.open[m.speaker] = {speaker: m.speaker, user_id: m.user_id, start: t};
+  } else if (m.event === 'end' && rec.open[m.speaker]) {
+    closeSegment(m.speaker, t - SEGMENT_GAP + 0.1);
+  }
+}
+function closeSegment(name, end) {
+  const s = rec.open[name];
+  delete rec.open[name];
+  s.end = Math.max(s.start, end);
+  s.id = rec.segs.length + 1;
+  s.text = '';
+  rec.segs.push(s);
+  const row = document.createElement('div');
+  row.textContent = `${fmt(s.start)}  ${s.speaker}  (${(s.end - s.start).toFixed(1)}s)`;
+  $('segs').appendChild(row);
+  $('segs').scrollTop = $('segs').scrollHeight;
 }
 function record(pcm) {
   if (!rec) return;
@@ -71,6 +101,9 @@ function record(pcm) {
 function saveRecording() {
   clearInterval(recTimer);
   $('rec').style.display = 'none';
+  if (!rec) return;
+  const now = (performance.now() - rec.t0) / 1000;
+  for (const name of Object.keys(rec.open)) closeSegment(name, now);
   const r = rec; rec = null;
   if (!r || !r.samples) return;
   const dataLen = r.samples * 2;
@@ -85,9 +118,23 @@ function saveRecording() {
   const name = ($('channel').textContent || 'voice').replace(/[^\w-]+/g, '_');
   const a = document.createElement('a');
   a.href = url;
-  a.download = `${name}-${d.getFullYear()}${z(d.getMonth() + 1)}${z(d.getDate())}-${z(d.getHours())}${z(d.getMinutes())}${z(d.getSeconds())}.wav`;
+  const base = `${name}-${d.getFullYear()}${z(d.getMonth() + 1)}${z(d.getDate())}-${z(d.getHours())}${z(d.getMinutes())}${z(d.getSeconds())}`;
+  a.download = base + '.wav';
   document.body.appendChild(a); a.click(); a.remove();
   setTimeout(() => URL.revokeObjectURL(url), 10000);
+  if (r.segs.length) {
+    const meta = {
+      started_at: r.startedAt.toISOString(), channel: $('channel').textContent,
+      audio_file: base + '.wav', duration_sec: Math.round(Math.max(now, r.samples / (RATE * 2)) * 10) / 10,
+      segments: r.segs.map(s => ({id: s.id, speaker: s.speaker, user_id: s.user_id,
+        start: Math.round(s.start * 10) / 10, end: Math.round(s.end * 10) / 10, text: ''})),
+    };
+    const jurl = URL.createObjectURL(new Blob([JSON.stringify(meta, null, 2)], {type: 'application/json'}));
+    const ja = document.createElement('a');
+    ja.href = jurl; ja.download = base + '.json';
+    document.body.appendChild(ja); ja.click(); ja.remove();
+    setTimeout(() => URL.revokeObjectURL(jurl), 10000);
+  }
 }
 function stop() {
   saveRecording();
