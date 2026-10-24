@@ -44,9 +44,16 @@ async function start() {
       else if (m.speakers) $('speakers').textContent = m.speakers.join(', ') || '-';
       return;
     }
-    const pcm = new Int16Array(e.data);
-    node.port.postMessage(pcm);
-    record(pcm);
+    // 4-byte header: kind (0 = mix, 1 = one speaker's mono track), pad, track index (u16 LE)
+    const head = new DataView(e.data, 0, 4);
+    const kind = head.getUint8(0);
+    if (kind === 0) {
+      const pcm = new Int16Array(e.data, 4);
+      node.port.postMessage(pcm);
+      record(pcm);
+    } else {
+      recordTrack(head.getUint16(2, true), new Int16Array(e.data, 4));
+    }
   };
   ws.onclose = stop;
   $('btn').textContent = '⏹ Stop'; $('state').textContent = 'listening';
@@ -54,13 +61,17 @@ async function start() {
 }
 
 function startRecording() {
-  rec = {chunks: [], samples: 0, t0: performance.now(), startedAt: new Date(), open: {}, segs: []}; // samples = interleaved int16 count
+  // samples = int16 count (mix is interleaved stereo, tracks are mono)
+  rec = {chunks: [], samples: 0, t0: performance.now(), startedAt: new Date(), open: {}, segs: [], tracks: {}};
   $('segs').textContent = ''; $('segcard').style.display = 'block';
   $('rec').style.display = 'block';
   recTimer = setInterval(() => {
     const sec = Math.floor((performance.now() - rec.t0) / 1000);
-    $('recinfo').textContent = `${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, '0')} (${(rec.samples * 2 / 1048576).toFixed(1)} MB)`;
+    $('recinfo').textContent = `${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, '0')} (${(recBytes() / 1048576).toFixed(1)} MB)`;
   }, 500);
+}
+function recBytes() {
+  return (rec.samples + Object.values(rec.tracks).reduce((n, t) => n + t.samples, 0)) * 2;
 }
 const SEGMENT_GAP = 0.8;
 const fmt = sec => `${String(Math.floor(sec / 60)).padStart(2, '0')}:${(sec % 60).toFixed(1).padStart(4, '0')}`;
@@ -69,6 +80,8 @@ function segmentEvent(m) {
   const t = (performance.now() - rec.t0) / 1000;
   if (m.event === 'start') {
     rec.open[m.speaker] = {speaker: m.speaker, user_id: m.user_id, start: t};
+    const tr = rec.tracks[m.track] || (rec.tracks[m.track] = {chunks: [], samples: 0});
+    tr.speaker = m.speaker; tr.user_id = m.user_id;
   } else if (m.event === 'end' && rec.open[m.speaker]) {
     closeSegment(m.speaker, t - SEGMENT_GAP + 0.1);
   }
@@ -85,18 +98,42 @@ function closeSegment(name, end) {
   $('segs').appendChild(row);
   $('segs').scrollTop = $('segs').scrollHeight;
 }
+// append pcm to a chunk list, padding silence so the file keeps real timing (server only sends frames while someone speaks)
+function append(target, pcm, channels) {
+  const expected = Math.floor((performance.now() - rec.t0) / 1000 * RATE) * channels;
+  const gap = expected - target.samples - pcm.length;
+  if (gap > 0.04 * RATE * channels) {
+    target.chunks.push(new Int16Array(gap));
+    target.samples += gap;
+  }
+  target.chunks.push(pcm);
+  target.samples += pcm.length;
+}
 function record(pcm) {
   if (!rec) return;
-  // pad silence so the file keeps real timing (server only sends frames while someone speaks)
-  const expected = Math.floor((performance.now() - rec.t0) / 1000 * RATE) * 2;
-  const gap = expected - rec.samples - pcm.length;
-  if (gap > 0.04 * RATE * 2) {
-    rec.chunks.push(new Int16Array(gap));
-    rec.samples += gap;
-  }
-  rec.chunks.push(pcm);
-  rec.samples += pcm.length;
-  if (rec.samples * 2 >= MAX_BYTES) { saveRecording(); startRecording(); }
+  append(rec, pcm, 2);
+  if (recBytes() >= MAX_BYTES) { saveRecording(); startRecording(); }
+}
+function recordTrack(index, pcm) {
+  if (!rec) return;
+  append(rec.tracks[index] || (rec.tracks[index] = {chunks: [], samples: 0}), pcm, 1);
+}
+function wavBlob(chunks, samples, channels) {
+  const dataLen = samples * 2;
+  const header = new DataView(new ArrayBuffer(44));
+  const str = (o, t) => [...t].forEach((c, i) => header.setUint8(o + i, c.charCodeAt(0)));
+  str(0, 'RIFF'); header.setUint32(4, 36 + dataLen, true); str(8, 'WAVE'); str(12, 'fmt ');
+  header.setUint32(16, 16, true); header.setUint16(20, 1, true); header.setUint16(22, channels, true);
+  header.setUint32(24, RATE, true); header.setUint32(28, RATE * 2 * channels, true); header.setUint16(32, 2 * channels, true);
+  header.setUint16(34, 16, true); str(36, 'data'); header.setUint32(40, dataLen, true);
+  return new Blob([header, ...chunks], {type: 'audio/wav'});
+}
+function download(blob, filename) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = filename;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 10000);
 }
 function saveRecording() {
   clearInterval(recTimer);
@@ -105,35 +142,32 @@ function saveRecording() {
   const now = (performance.now() - rec.t0) / 1000;
   for (const name of Object.keys(rec.open)) closeSegment(name, now);
   const r = rec; rec = null;
-  if (!r || !r.samples) return;
-  const dataLen = r.samples * 2;
-  const header = new DataView(new ArrayBuffer(44));
-  const str = (o, t) => [...t].forEach((c, i) => header.setUint8(o + i, c.charCodeAt(0)));
-  str(0, 'RIFF'); header.setUint32(4, 36 + dataLen, true); str(8, 'WAVE'); str(12, 'fmt ');
-  header.setUint32(16, 16, true); header.setUint16(20, 1, true); header.setUint16(22, 2, true);
-  header.setUint32(24, RATE, true); header.setUint32(28, RATE * 4, true); header.setUint16(32, 4, true);
-  header.setUint16(34, 16, true); str(36, 'data'); header.setUint32(40, dataLen, true);
-  const url = URL.createObjectURL(new Blob([header, ...r.chunks], {type: 'audio/wav'}));
+  if (!r.samples) return;
   const d = new Date(), z = n => String(n).padStart(2, '0');
   const name = ($('channel').textContent || 'voice').replace(/[^\w-]+/g, '_');
-  const a = document.createElement('a');
-  a.href = url;
   const base = `${name}-${d.getFullYear()}${z(d.getMonth() + 1)}${z(d.getDate())}-${z(d.getHours())}${z(d.getMinutes())}${z(d.getSeconds())}`;
-  a.download = base + '.wav';
-  document.body.appendChild(a); a.click(); a.remove();
-  setTimeout(() => URL.revokeObjectURL(url), 10000);
+  const duration = Math.max(now, r.samples / (RATE * 2));
+  download(wavBlob(r.chunks, r.samples, 2), base + '.wav');
+
+  // one mono WAV per speaker, padded to the same length so every file shares the mix's timeline
+  const tracks = {};
+  const total = Math.ceil(duration * RATE);
+  for (const [index, t] of Object.entries(r.tracks)) {
+    if (!t.speaker || !t.samples) continue;
+    const safe = t.speaker.replace(/[^\p{L}\p{N}_-]+/gu, '_');
+    const file = `${base}.t${index}-${safe}.wav`;
+    if (total > t.samples) { t.chunks.push(new Int16Array(total - t.samples)); t.samples = total; }
+    download(wavBlob(t.chunks, t.samples, 1), file);
+    tracks[t.speaker] = file;
+  }
   if (r.segs.length) {
     const meta = {
       started_at: r.startedAt.toISOString(), channel: $('channel').textContent,
-      audio_file: base + '.wav', duration_sec: Math.round(Math.max(now, r.samples / (RATE * 2)) * 10) / 10,
+      audio_file: base + '.wav', tracks, duration_sec: Math.round(duration * 10) / 10,
       segments: r.segs.map(s => ({id: s.id, speaker: s.speaker, user_id: s.user_id,
         start: Math.round(s.start * 10) / 10, end: Math.round(s.end * 10) / 10, text: ''})),
     };
-    const jurl = URL.createObjectURL(new Blob([JSON.stringify(meta, null, 2)], {type: 'application/json'}));
-    const ja = document.createElement('a');
-    ja.href = jurl; ja.download = base + '.json';
-    document.body.appendChild(ja); ja.click(); ja.remove();
-    setTimeout(() => URL.revokeObjectURL(jurl), 10000);
+    download(new Blob([JSON.stringify(meta, null, 2)], {type: 'application/json'}), base + '.json');
   }
 }
 function stop() {

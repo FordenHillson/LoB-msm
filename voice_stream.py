@@ -1,5 +1,6 @@
 import json
 import queue
+import struct
 import threading
 import time
 from collections import deque
@@ -12,6 +13,11 @@ FRAME_BYTES = 3840  # 20ms of 48kHz stereo s16le
 FRAME_SECONDS = 0.02
 SEGMENT_GAP = 0.8  # seconds of silence that ends a speaker segment (client subtracts this)
 MAX_USER_BACKLOG = 10  # frames kept per speaker before dropping oldest
+KIND_MIX, KIND_TRACK = 0, 1  # first byte of every binary message; header is 4 bytes: kind, pad, track index (u16 LE)
+
+
+def frame_message(kind, pcm, track=0):
+    return struct.pack("<BBH", kind, 0, track) + pcm
 
 
 class VoiceHub:
@@ -24,7 +30,7 @@ class VoiceHub:
         self.speakers = {}  # user name -> last time spoke
 
     def add_listener(self):
-        q = queue.Queue(maxsize=50)
+        q = queue.Queue(maxsize=200)
         with self._lock:
             self._listeners.add(q)
         return q
@@ -75,6 +81,7 @@ class MixingSink(voice_recv.AudioSink):
         self._buffers = {}
         self._open = {}  # speaker name -> user id string, for speaker segment events
         self._last_heard = {}
+        self._track_index = {}  # speaker name -> stable small int used in track frames
         self._running = True
         self._thread = threading.Thread(target=self._mix_loop, daemon=True)
         self._thread.start()
@@ -86,6 +93,7 @@ class MixingSink(voice_recv.AudioSink):
         if user is None or not data.pcm:
             return
         name = getattr(user, "display_name", str(user))
+        track = self._track_index.setdefault(name, len(self._track_index))  # before buffering: mix thread reads it
         with self._lock:
             buf = self._buffers.setdefault(name, deque(maxlen=MAX_USER_BACKLOG))
             buf.append(data.pcm)
@@ -94,7 +102,7 @@ class MixingSink(voice_recv.AudioSink):
         self._last_heard[name] = now
         if name not in self._open:
             self._open[name] = str(getattr(user, "id", ""))
-            hub.publish(json.dumps({"event": "start", "speaker": name, "user_id": self._open[name]}))
+            hub.publish(json.dumps({"event": "start", "speaker": name, "user_id": self._open[name], "track": track}))
 
     def _mix_loop(self):
         next_tick = time.monotonic()
@@ -103,16 +111,19 @@ class MixingSink(voice_recv.AudioSink):
             next_tick += FRAME_SECONDS
             frames = []
             with self._lock:
-                for buf in self._buffers.values():
+                for name, buf in self._buffers.items():
                     if buf:
-                        frames.append(buf.popleft())
+                        frames.append((name, buf.popleft()))
             if frames and hub.listener_count():
                 mixed = np.zeros(FRAME_BYTES // 2, dtype=np.int32)
-                for f in frames:
+                for name, f in frames:
                     arr = np.frombuffer(f, dtype=np.int16)
                     mixed[: len(arr)] += arr
+                    # per-speaker mono track (L/R average) so transcription never hears other people
+                    mono = arr[: len(arr) // 2 * 2].reshape(-1, 2).astype(np.int32).mean(axis=1).astype(np.int16)
+                    hub.publish(frame_message(KIND_TRACK, mono.tobytes(), self._track_index[name]))
                 pcm = np.clip(mixed, -32768, 32767).astype(np.int16).tobytes()
-                hub.publish(pcm)
+                hub.publish(frame_message(KIND_MIX, pcm))
             now = time.monotonic()
             for name in [n for n in self._open if now - self._last_heard[n] >= SEGMENT_GAP]:
                 uid = self._open.pop(name)
