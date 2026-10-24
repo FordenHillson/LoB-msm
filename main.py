@@ -18,7 +18,7 @@ from flask import Flask, render_template, request, session, redirect, jsonify, a
 from flask_sock import Sock
 from threading import Thread
 
-from voice_stream import hub, MixingSink, install_dave_decrypt
+from voice_stream import hub, MixingSink, install_dave_decrypt, harden_opus_decoder
 
 load_dotenv()
 
@@ -582,6 +582,7 @@ async def voice_join_command(interaction: discord.Interaction):
         await interaction.followup.send(f"❌ Could not join voice: {type(e).__name__}: {e}", ephemeral=True)
         return
     vc.listen(MixingSink())
+    harden_opus_decoder()
     install_dave_decrypt(vc)
     hub.channel_name = channel.name
     await interaction.followup.send(f"🎧 Joined **{channel.name}**.", ephemeral=True)

@@ -7,6 +7,7 @@ from collections import deque
 import numpy as np
 from discord.ext import voice_recv
 
+OPUS_SILENCE = bytes([0xF8, 0xFF, 0xFE])
 FRAME_BYTES = 3840  # 20ms of 48kHz stereo s16le
 FRAME_SECONDS = 0.02
 MAX_USER_BACKLOG = 10  # frames kept per speaker before dropping oldest
@@ -130,11 +131,11 @@ def install_dave_decrypt(vc):
         data = transport_decrypt(packet)
         conn = vc._connection
         session = getattr(conn, "dave_session", None)
-        if session is None or not conn.dave_protocol_version or not session.ready:
+        if session is None or not conn.dave_protocol_version:
             return data
         user_id = vc._ssrc_to_id.get(packet.ssrc)
-        if user_id is None:
-            return data
+        if not session.ready or user_id is None:
+            return OPUS_SILENCE  # still encrypted; feeding it to opus would corrupt the stream
         try:
             out = session.decrypt(user_id, davey.MediaType.audio, data)
             stats["ok"] += 1
@@ -143,6 +144,26 @@ def install_dave_decrypt(vc):
             stats["fail"] += 1
             if stats["fail"] in (1, 50, 500):
                 print(f"DAVE decrypt failed ({stats}): {type(e).__name__}: {e}")
-            return data
+            return OPUS_SILENCE
 
     decryptor.decrypt_rtp = decrypt_rtp
+
+
+def harden_opus_decoder():
+    """One bad packet raises OpusError and makes voice_recv stop listening entirely; emit silence instead."""
+    from discord.ext.voice_recv import opus as vr_opus
+    from discord.opus import OpusError
+
+    cls = vr_opus.PacketDecoder
+    if getattr(cls, "_hardened", False):
+        return
+    original = cls._decode_packet
+
+    def safe_decode(self, packet):
+        try:
+            return original(self, packet)
+        except OpusError:
+            return packet, bytes(FRAME_BYTES)
+
+    cls._decode_packet = safe_decode
+    cls._hardened = True
