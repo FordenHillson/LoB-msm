@@ -13,8 +13,8 @@ A single Discord channel message that informs members about one newly seen Patch
 _Avoid_: notify, alert, broadcast
 
 **Voice Monitor**:
-The bot's live, non-recorded relay of a Discord voice channel's mixed audio to the admin web dashboard.
-_Avoid_: recording, wiretap
+The bot's live relay of a Discord voice channel's mixed audio to the admin web dashboard. Nothing is stored on the server; an admin's browser can save a local WAV while listening.
+_Avoid_: wiretap
 
 **Listener**:
 An authenticated admin browser session connected to the Voice Monitor stream.

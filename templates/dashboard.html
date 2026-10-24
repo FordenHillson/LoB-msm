@@ -10,10 +10,13 @@ a{color:#aaa}</style></head>
 <h2>🎧 Voice Monitor</h2>
 <div class="card"><span id="dot" class="dot"></span><b id="channel">-</b><br>
 Speaking: <span id="speakers">-</span><br>Listeners: <span id="listeners">0</span></div>
-<div class="card"><button id="btn">▶ Listen</button> <span id="state"></span></div>
+<div class="card"><button id="btn">▶ Listen</button> <span id="state"></span>
+<div id="rec" style="display:none;margin-top:8px"><span style="color:#f04747">●</span> REC <span id="recinfo"></span></div></div>
 <a href="/logout">Logout</a>
 <script>
 let ctx, node, ws;
+const RATE = 48000, MAX_BYTES = 300 * 1024 * 1024;
+let rec = null, recTimer = null;
 const $ = id => document.getElementById(id);
 async function poll() {
   try {
@@ -35,12 +38,59 @@ async function start() {
   ws.binaryType = 'arraybuffer';
   ws.onmessage = e => {
     if (typeof e.data === 'string') { $('speakers').textContent = JSON.parse(e.data).speakers.join(', ') || '-'; return; }
-    node.port.postMessage(new Int16Array(e.data));
+    const pcm = new Int16Array(e.data);
+    node.port.postMessage(pcm);
+    record(pcm);
   };
   ws.onclose = stop;
   $('btn').textContent = '⏹ Stop'; $('state').textContent = 'listening';
+  startRecording();
+}
+
+function startRecording() {
+  rec = {chunks: [], samples: 0, t0: performance.now()}; // samples = interleaved int16 count
+  $('rec').style.display = 'block';
+  recTimer = setInterval(() => {
+    const sec = Math.floor((performance.now() - rec.t0) / 1000);
+    $('recinfo').textContent = `${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, '0')} (${(rec.samples * 2 / 1048576).toFixed(1)} MB)`;
+  }, 500);
+}
+function record(pcm) {
+  if (!rec) return;
+  // pad silence so the file keeps real timing (server only sends frames while someone speaks)
+  const expected = Math.floor((performance.now() - rec.t0) / 1000 * RATE) * 2;
+  const gap = expected - rec.samples - pcm.length;
+  if (gap > 0.04 * RATE * 2) {
+    rec.chunks.push(new Int16Array(gap));
+    rec.samples += gap;
+  }
+  rec.chunks.push(pcm);
+  rec.samples += pcm.length;
+  if (rec.samples * 2 >= MAX_BYTES) { saveRecording(); startRecording(); }
+}
+function saveRecording() {
+  clearInterval(recTimer);
+  $('rec').style.display = 'none';
+  const r = rec; rec = null;
+  if (!r || !r.samples) return;
+  const dataLen = r.samples * 2;
+  const header = new DataView(new ArrayBuffer(44));
+  const str = (o, t) => [...t].forEach((c, i) => header.setUint8(o + i, c.charCodeAt(0)));
+  str(0, 'RIFF'); header.setUint32(4, 36 + dataLen, true); str(8, 'WAVE'); str(12, 'fmt ');
+  header.setUint32(16, 16, true); header.setUint16(20, 1, true); header.setUint16(22, 2, true);
+  header.setUint32(24, RATE, true); header.setUint32(28, RATE * 4, true); header.setUint16(32, 4, true);
+  header.setUint16(34, 16, true); str(36, 'data'); header.setUint32(40, dataLen, true);
+  const url = URL.createObjectURL(new Blob([header, ...r.chunks], {type: 'audio/wav'}));
+  const d = new Date(), z = n => String(n).padStart(2, '0');
+  const name = ($('channel').textContent || 'voice').replace(/[^\w-]+/g, '_');
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `${name}-${d.getFullYear()}${z(d.getMonth() + 1)}${z(d.getDate())}-${z(d.getHours())}${z(d.getMinutes())}${z(d.getSeconds())}.wav`;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 10000);
 }
 function stop() {
+  saveRecording();
   if (ws) { ws.onclose = null; ws.close(); ws = null; }
   if (ctx) { ctx.close(); ctx = null; }
   $('btn').textContent = '▶ Listen'; $('state').textContent = '';
